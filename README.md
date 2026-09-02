@@ -12,6 +12,9 @@ terceiros.
   <a href="https://github.com/Guel444/novelai-reader/releases/latest">
     <img src="https://img.shields.io/badge/Download-Android%20(.apk)-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Baixar para Android">
   </a>
+  <a href="https://discord.gg/vf22meZj9A">
+    <img src="https://img.shields.io/badge/Discord-Entrar%20na%20comunidade-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Entrar no Discord">
+  </a>
 </p>
 
 <p align="center">
@@ -65,6 +68,11 @@ desconhecidas" já que o app não vem da Play Store.
 
 Se preferir rodar a partir do código-fonte (ou contribuir com o
 projeto), siga o README da pasta correspondente.
+
+## Comunidade
+
+Dúvidas, sugestões, relatos de bug ou só pra bater papo sobre as
+novels que você está lendo: [entre no Discord](https://discord.gg/vf22meZj9A).
 
 ## Limitações conhecidas
 
