@@ -1,0 +1,51 @@
+# ===== Geral =====
+.DS_Store
+Thumbs.db
+*.log
+
+# ===== desktop/ (Python) =====
+desktop/__pycache__/
+desktop/**/__pycache__/
+desktop/*.pyc
+desktop/.venv/
+desktop/venv/
+desktop/build/
+desktop/dist/
+desktop/*.spec
+
+# dados de uso pessoal — cada leitor gera os seus, não fazem sentido
+# versionados (livros abertos, cache de tradução, backups, glossário
+# preenchido com termos de novels específicas)
+desktop/books/*
+desktop/cache/*
+desktop/translations/*
+desktop/config.json
+desktop/assets/glossario.json
+!desktop/books/.gitkeep
+!desktop/cache/.gitkeep
+!desktop/translations/.gitkeep
+
+# ===== mobile/ (Flutter/Dart) =====
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.packages
+mobile/build/
+mobile/**/doc/api/
+mobile/*.iml
+mobile/.idea/
+
+# artefatos gerados do lado Android/iOS (o resto de android/ e ios/
+# É pra ficar versionado — inclui o ícone e nome do app configurados)
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/app/debug
+mobile/android/app/profile
+mobile/android/app/release
+mobile/android/**/GeneratedPluginRegistrant.java
+mobile/android/key.properties
+mobile/ios/Flutter/.last_build_id
+*.jks
+
+# chave de licença pessoal — nunca comitar
+mobile/lib/services/syncfusion_license.dart

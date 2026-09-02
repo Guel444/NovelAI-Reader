@@ -1,0 +1,6 @@
+PySide6
+ebooklib
+beautifulsoup4
+deep-translator
+Pillow
+pypdf
