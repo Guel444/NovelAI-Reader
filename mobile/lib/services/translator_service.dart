@@ -41,8 +41,9 @@ class TranslationError implements Exception {
   String toString() => message;
 }
 
-const _maxRetries = 3;
-const _retryDelay = Duration(milliseconds: 1500);
+const _maxRetries = 6;
+const _baseTimeout = Duration(seconds: 15);
+const _retryDelay = Duration(seconds: 2);
 const _chunkSize = 4000; // limite prático por chamada
 const _paragraphSeparator = '\n@@P@@\n';
 const _separatorToken = '@@P@@';
@@ -77,7 +78,7 @@ class Translator {
           'dt': 't',
           'q': text,
         });
-        final response = await http.get(uri).timeout(const Duration(seconds: 20));
+        final response = await http.get(uri).timeout(_baseTimeout * attempt);
         if (response.statusCode != 200) {
           throw TranslationError('HTTP ${response.statusCode}');
         }
@@ -105,8 +106,10 @@ class Translator {
       }
     }
     throw TranslationError(
-      'Não consegui traduzir depois de $_maxRetries tentativas '
-      '(verifique sua conexão, ou espere um pouco). Detalhe: $lastError',
+      'Não consegui traduzir depois de $_maxRetries tentativas, mesmo '
+      'esperando cada vez mais tempo por tentativa (até '
+      '${(_baseTimeout * _maxRetries).inSeconds}s). Verifique se a conexão '
+      'está mesmo respondendo, não só ligada. Detalhe: $lastError',
     );
   }
 

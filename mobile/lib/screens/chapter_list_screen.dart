@@ -9,6 +9,7 @@ import '../theme/app_theme.dart';
 import 'chapter_manager_screen.dart';
 import 'export_screen.dart';
 import 'reader_screen.dart';
+import 'translate_all_screen.dart';
 
 /// Lista de capítulos do livro aberto, com busca, indicadores de
 /// lido/favorito/nota/grifos, e acesso ao gerenciador manual de
@@ -67,6 +68,15 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
       appBar: AppBar(
         title: Text(_book.title, overflow: TextOverflow.ellipsis),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.translate),
+            tooltip: 'Traduzir livro inteiro',
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => TranslateAllScreen(book: _book),
+              ));
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.file_download_outlined),
             tooltip: 'Exportar EPUB traduzido',

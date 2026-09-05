@@ -14,6 +14,7 @@ import '../theme/app_theme.dart';
 import 'glossary_screen.dart';
 import 'highlights_screen.dart';
 import 'export_screen.dart';
+import 'translate_all_screen.dart';
 import 'settings_screen.dart';
 import 'wiki_screen.dart';
 
@@ -399,12 +400,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           builder: (_) => ExportScreen(book: widget.book),
                         ));
                         break;
+                      case 'translate_all':
+                        Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => TranslateAllScreen(book: widget.book),
+                        ));
+                        break;
                     }
                   },
                   itemBuilder: (context) => const [
                     PopupMenuItem(value: 'glossary', child: Text('Glossário')),
                     PopupMenuItem(value: 'highlights', child: Text('Grifos')),
                     PopupMenuItem(value: 'wiki', child: Text('Wiki de personagens')),
+                    PopupMenuItem(value: 'translate_all', child: Text('Traduzir livro inteiro')),
                     PopupMenuItem(value: 'export', child: Text('Exportar EPUB traduzido')),
                     PopupMenuItem(value: 'settings', child: Text('Configurações')),
                   ],
