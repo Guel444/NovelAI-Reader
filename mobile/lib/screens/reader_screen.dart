@@ -24,12 +24,12 @@ import 'wiki_screen.dart';
 /// qualquer troca de capítulo).
 class ReaderScreen extends StatefulWidget {
   final ParsedBook book;
-  final int initialChapterIndex;
+  final int? initialChapterIndex;
 
   const ReaderScreen({
     super.key,
     required this.book,
-    this.initialChapterIndex = 0,
+    this.initialChapterIndex,
   });
 
   @override
@@ -49,11 +49,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Color _bgColor = AppPalette.bg;
   bool _sideBySide = false;
   bool _focusMode = false;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
-    _chapterIndex = widget.initialChapterIndex;
+    _chapterIndex = widget.initialChapterIndex ?? 0;
     _scrollController.addListener(_onScroll);
     _bootstrap();
   }
@@ -72,7 +73,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _config = config;
       _translator = translator;
       _sideBySide = config.get('side_by_side', false) as bool;
-      _chapterIndex = config.getLastChapter(widget.book.bookId).clamp(0, widget.book.chapterCount - 1);
+      // só usa "onde parei" quando ninguém pediu um capítulo específico
+      // (ex.: abrindo o livro pela biblioteca) — nunca sobrescreve uma
+      // navegação explícita, como clicar num capítulo da lista
+      _chapterIndex = (widget.initialChapterIndex ?? config.getLastChapter(widget.book.bookId))
+          .clamp(0, widget.book.chapterCount - 1);
     });
 
     final useCoverTheme = config.get('use_cover_theme', true) as bool;
@@ -86,10 +91,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _loadChapter(int index) async {
+    final generation = ++_loadGeneration;
     _markedReadThisChapter = _config?.isRead(widget.book.bookId, index) ?? false;
     setState(() {
       _translatedParagraphs = null;
       _translationError = null;
+      _isTranslating = false;
     });
     await _config?.setLastChapter(widget.book.bookId, index);
 
@@ -100,6 +107,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final paragraphs = chapter.paragraphs;
     if (paragraphs.isEmpty) return;
 
+    if (!mounted || generation != _loadGeneration) return;
     setState(() => _isTranslating = true);
     try {
       final translated = await _translator!.translateChapter(
@@ -107,13 +115,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
         bookId: widget.book.bookId,
         chapterIndex: index,
       );
-      if (!mounted || index != _chapterIndex) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _translatedParagraphs = translated;
         _isTranslating = false;
       });
     } on TranslationError catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _translationError = e.message;
         _isTranslating = false;
@@ -188,14 +196,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
-  Future<void> _onParagraphLongPress(String paragraphText) async {
+  Future<void> _onParagraphLongPress(int paragraphIndex, String paragraphText) async {
     final config = _config;
     if (config == null) return;
-    final existingIndex = config.findHighlightIndex(widget.book.bookId, _chapterIndex, paragraphText);
+    final existingIndex = config.findHighlightIndex(widget.book.bookId, _chapterIndex, paragraphIndex, paragraphText);
     if (existingIndex >= 0) {
       await _confirmRemoveHighlight(existingIndex, paragraphText);
     } else {
-      await _openAddHighlightDialog(paragraphText);
+      await _openAddHighlightDialog(paragraphIndex, paragraphText);
     }
   }
 
@@ -277,7 +285,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
-  Future<void> _openAddHighlightDialog(String paragraphText) async {
+  Future<void> _openAddHighlightDialog(int paragraphIndex, String paragraphText) async {
     final config = _config;
     if (config == null) return;
     final commentController = TextEditingController();
@@ -312,6 +320,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       await config.addHighlight(
         widget.book.bookId,
         _chapterIndex,
+        paragraphIndex,
         paragraphText,
         comment: commentController.text.trim(),
       );
@@ -493,12 +502,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       textIndex++;
 
       final isHighlighted = _config != null &&
-          _config!.findHighlightIndex(widget.book.bookId, _chapterIndex, displayText) >= 0;
+          _config!.findHighlightIndex(widget.book.bookId, _chapterIndex, currentIndex, displayText) >= 0;
 
       widgets.add(Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: GestureDetector(
-          onLongPress: () => _onParagraphLongPress(displayText),
+          onLongPress: () => _onParagraphLongPress(currentIndex, displayText),
           onTap: translated != null
               ? () => _editTranslation(currentIndex, block.text, translated)
               : null,

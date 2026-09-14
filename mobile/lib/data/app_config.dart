@@ -99,8 +99,17 @@ class AppConfig {
     return config;
   }
 
-  Future<void> _save() async {
-    await _file.writeAsString(json.encode(_data));
+  Future<void> _pendingSave = Future.value();
+
+  Future<void> _save() {
+    // o encode acontece agora (síncrono, captura o estado atual);
+    // só a escrita em disco é encadeada, garantindo que os arquivos
+    // terminem de gravar na mesma ordem em que foram pedidos — sem
+    // isso, uma gravação mais lenta poderia sobrescrever uma mais
+    // recente com dados desatualizados
+    final serialized = json.encode(_data);
+    _pendingSave = _pendingSave.then((_) => _file.writeAsString(serialized));
+    return _pendingSave;
   }
 
   dynamic get(String key, [dynamic fallback]) => _data[key] ?? fallback;
@@ -123,10 +132,16 @@ class AppConfig {
   // ---------- ajuste manual de capítulos (gerenciador de capítulos) ----------
 
   Map<String, bool> getChapterOverrides(String bookId) {
-    final all = _data['excluded_chapters'] as Map<String, dynamic>;
-    final bookOverrides = all[bookId] as Map<String, dynamic>?;
-    if (bookOverrides == null) return {};
-    return bookOverrides.map((k, v) => MapEntry(k, v as bool));
+    try {
+      final all = _data['excluded_chapters'] as Map<String, dynamic>;
+      final bookOverrides = all[bookId] as Map<String, dynamic>?;
+      if (bookOverrides == null) return {};
+      return bookOverrides.map((k, v) => MapEntry(k, v as bool));
+    } catch (_) {
+      // dado corrompido ou de um formato antigo/incompatível — melhor
+      // abrir o livro com a detecção automática do que travar o app
+      return {};
+    }
   }
 
   Future<void> setChapterOverrides(String bookId, Map<String, bool> overrides) async {
@@ -145,9 +160,15 @@ class AppConfig {
 
   List<LibraryEntry> getLibrary() {
     final library = _data['library'] as Map<String, dynamic>;
-    final entries = library.entries
-        .map((e) => LibraryEntry.fromJson(e.key, e.value as Map<String, dynamic>))
-        .toList();
+    final entries = <LibraryEntry>[];
+    for (final e in library.entries) {
+      try {
+        entries.add(LibraryEntry.fromJson(e.key, e.value as Map<String, dynamic>));
+      } catch (_) {
+        // um item corrompido não deve derrubar a biblioteca inteira
+        continue;
+      }
+    }
     entries.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
     return entries;
   }
@@ -203,30 +224,47 @@ class AppConfig {
 
   // ---------- grifos + comentários ----------
 
-  Future<void> addHighlight(String bookId, int chapterIndex, String text, {String comment = ''}) async {
+  Future<void> addHighlight(
+    String bookId,
+    int chapterIndex,
+    int paragraphIndex,
+    String text, {
+    String comment = '',
+  }) async {
     final highlights = _data['highlights'] as Map<String, dynamic>;
     final bookH = (highlights[bookId] as Map<String, dynamic>?) ?? <String, dynamic>{};
     final chapterH = (bookH[chapterIndex.toString()] as List?)?.cast<Map<String, dynamic>>() ?? <Map<String, dynamic>>[];
-    chapterH.add({'text': text, 'comment': comment});
+    chapterH.add({'paragraphIndex': paragraphIndex, 'text': text, 'comment': comment});
     bookH[chapterIndex.toString()] = chapterH;
     highlights[bookId] = bookH;
     await _save();
   }
 
   List<Map<String, dynamic>> getHighlights(String bookId, int chapterIndex) {
-    final highlights = _data['highlights'] as Map<String, dynamic>;
-    final bookH = highlights[bookId] as Map<String, dynamic>?;
-    return (bookH?[chapterIndex.toString()] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    try {
+      final highlights = _data['highlights'] as Map<String, dynamic>;
+      final bookH = highlights[bookId] as Map<String, dynamic>?;
+      return (bookH?[chapterIndex.toString()] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    } catch (_) {
+      return [];
+    }
   }
 
-  /// Índice do grifo cujo texto bate exatamente com [text] neste
-  /// capítulo, ou -1 se não houver nenhum — usado pra saber se um
-  /// parágrafo já está grifado (destaque visual) e pra alternar
-  /// grifar/remover no toque-e-segure.
-  int findHighlightIndex(String bookId, int chapterIndex, String text) {
+  /// Índice do grifo deste parágrafo (pela posição dele no capítulo),
+  /// ou -1 se não houver nenhum — usado pra saber se um parágrafo já
+  /// está grifado (destaque visual) e pra alternar grifar/remover no
+  /// toque-e-segure. Grifos antigos (salvos antes desta versão, sem
+  /// posição registrada) ainda são reconhecidos por texto, pra não
+  /// perder grifos já feitos.
+  int findHighlightIndex(String bookId, int chapterIndex, int paragraphIndex, String text) {
     final list = getHighlights(bookId, chapterIndex);
     for (var i = 0; i < list.length; i++) {
-      if (list[i]['text'] == text) return i;
+      final storedParagraphIndex = list[i]['paragraphIndex'] as int?;
+      if (storedParagraphIndex != null) {
+        if (storedParagraphIndex == paragraphIndex) return i;
+      } else if (list[i]['text'] == text) {
+        return i; // grifo antigo, sem posição — cai pro texto
+      }
     }
     return -1;
   }

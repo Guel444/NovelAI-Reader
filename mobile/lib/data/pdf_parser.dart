@@ -8,7 +8,6 @@
 /// veja lib/services/syncfusion_license.dart.
 library pdf_parser;
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -135,7 +134,7 @@ class PdfParser {
     final fileName = sourcePath.split('/').last;
     final candidates = splitPlainTextIntoCandidates(content, 'pdf_chunk');
     final title = fileName.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
-    final bookId = sha1.convert(utf8.encode(fileName)).toString().substring(0, 12);
+    final bookId = sha1.convert(bytes).toString().substring(0, 12);
 
     if (candidates.isEmpty) {
       throw PdfParseException(

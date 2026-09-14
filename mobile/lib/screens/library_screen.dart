@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../data/app_config.dart';
 import '../data/epub_parser.dart';
@@ -23,6 +24,25 @@ Future<ParsedBookSource> _parseByExtension(Uint8List bytes, String fileName) {
     return PdfParser.parse(bytes, fileName);
   }
   return EpubParser.parse(bytes, fileName);
+}
+
+/// Guarda uma cópia do arquivo importado dentro da pasta própria do
+/// app, e devolve o caminho dessa cópia. O caminho original (vindo do
+/// seletor de arquivo do Android) pode parar de funcionar mais tarde
+/// — sistema de arquivos com acesso restrito, arquivo movido/apagado
+/// pelo usuário, app de origem desinstalado — sem que o livro em si
+/// tenha sumido de verdade. Guardando nossa própria cópia, reabrir um
+/// livro da biblioteca nunca depende de nada fora do controle do app.
+Future<String> _copyIntoAppStorage(Uint8List bytes, String bookId, String originalFileName) async {
+  final dir = await getApplicationDocumentsDirectory();
+  final booksDir = Directory('${dir.path}/books');
+  if (!await booksDir.exists()) {
+    await booksDir.create(recursive: true);
+  }
+  final ext = originalFileName.contains('.') ? originalFileName.split('.').last : 'bin';
+  final file = File('${booksDir.path}/$bookId.$ext');
+  await file.writeAsBytes(bytes);
+  return file.path;
 }
 
 /// Tela inicial do app: mostra a estante de livros já abertos e o
@@ -97,7 +117,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
       await _config?.addToLibrary(LibraryEntry(
         bookId: source.bookId,
-        path: picked.path ?? picked.name,
+        path: await _copyIntoAppStorage(Uint8List.fromList(bytes), source.bookId, picked.name),
         title: source.title,
         author: source.author,
         lastOpened: DateTime.now(),
@@ -162,6 +182,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> _removeFromLibrary(LibraryEntry entry) async {
     await _config?.removeFromLibrary(entry.bookId);
+    try {
+      final file = File(entry.path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // não é crítico se a limpeza do arquivo falhar
+    }
     await _loadLibrary();
   }
 

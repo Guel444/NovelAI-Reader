@@ -26,7 +26,7 @@ class TxtParser {
     final fileName = sourcePath.split('/').last;
     final candidates = splitPlainTextIntoCandidates(content, 'txt_chunk');
     final title = fileName.replaceAll(RegExp(r'\.txt$', caseSensitive: false), '');
-    final bookId = sha1.convert(utf8.encode(fileName)).toString().substring(0, 12);
+    final bookId = sha1.convert(bytes).toString().substring(0, 12);
 
     return ParsedBookSource(
       bookId: bookId,

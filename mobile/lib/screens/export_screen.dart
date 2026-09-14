@@ -48,30 +48,43 @@ class _ExportScreenState extends State<ExportScreen> {
       final translator = Translator(targetLang: targetLang, cache: cache, glossary: glossary);
 
       final translatedByChapter = <int, List<String>>{};
+      var chaptersFailed = 0;
       for (final chapter in widget.book.chapters) {
         final paragraphs = chapter.paragraphs;
         if (paragraphs.isEmpty) {
           _chaptersDone++;
           continue;
         }
+        if (!mounted) return;
         setState(() => _chapterProgress = 0);
-        final translated = await translator.translateChapter(
-          paragraphs,
-          bookId: widget.book.bookId,
-          chapterIndex: chapter.index,
-          onProgress: (done, total) {
-            if (mounted && total > 0) setState(() => _chapterProgress = done / total);
-          },
-        );
-        translatedByChapter[chapter.index] = translated;
+        try {
+          final translated = await translator.translateChapter(
+            paragraphs,
+            bookId: widget.book.bookId,
+            chapterIndex: chapter.index,
+            onProgress: (done, total) {
+              if (mounted && total > 0) setState(() => _chapterProgress = done / total);
+            },
+          );
+          translatedByChapter[chapter.index] = translated;
+        } on TranslationError {
+          // um capítulo falhando não deve jogar fora a tradução dos
+          // outros — ele só sai no idioma original no arquivo final
+          chaptersFailed++;
+        }
         _chaptersDone++;
         if (mounted) setState(() {});
       }
 
       final epubBytes = buildTranslatedEpub(widget.book, translatedByChapter, targetLang: targetLang);
       await _saveEpub(epubBytes);
+      if (chaptersFailed > 0 && mounted) {
+        setState(() {
+          _error = '$chaptersFailed capítulo(s) não traduziram e saíram no idioma original no arquivo.';
+        });
+      }
     } catch (e) {
-      setState(() => _error = 'Erro ao exportar: $e');
+      if (mounted) setState(() => _error = 'Erro ao exportar: $e');
     } finally {
       if (mounted) setState(() => _running = false);
     }
@@ -83,6 +96,7 @@ class _ExportScreenState extends State<ExportScreen> {
       fileName: '$safeName (traduzido).epub',
       bytes: bytes,
     );
+    if (!mounted) return;
     setState(() {
       _done = true;
       _savedPath = savedPath;

@@ -230,7 +230,7 @@ class EpubParser {
     // 7. capa
     final coverBytes = _extractCover(opfXml, idToHref, idToProperties, filesByName);
 
-    final bookId = sha1.convert(utf8.encode(sourcePath.split('/').last)).toString().substring(0, 12);
+    final bookId = sha1.convert(bytes).toString().substring(0, 12);
 
     final candidates = rawEntries
         .map((e) => RawChapterCandidate(

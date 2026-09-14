@@ -52,6 +52,7 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
           if (mounted) setState(() {});
           continue;
         }
+        if (!mounted) return;
         setState(() => _chapterProgress = 0);
         try {
           await translator.translateChapter(
@@ -71,7 +72,7 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
 
       if (mounted) setState(() => _done = true);
     } catch (e) {
-      setState(() => _error = 'Erro ao traduzir: $e');
+      if (mounted) setState(() => _error = 'Erro ao traduzir: $e');
     } finally {
       if (mounted) setState(() => _running = false);
     }
