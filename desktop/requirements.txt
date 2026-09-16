@@ -2,5 +2,6 @@ PySide6
 ebooklib
 beautifulsoup4
 deep-translator
+requests
 Pillow
 pypdf

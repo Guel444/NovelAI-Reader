@@ -23,10 +23,109 @@ class _SettingsScreenState extends State<SettingsScreen> {
   AppConfig? _config;
   String? _statusMessage;
 
+  final _deeplKeyController = TextEditingController();
+  final _geminiKeyController = TextEditingController();
+  bool _showDeeplKey = false;
+  bool _showGeminiKey = false;
+
   @override
   void initState() {
     super.initState();
-    AppConfig.load().then((c) => setState(() => _config = c));
+    AppConfig.load().then((c) {
+      _deeplKeyController.text = c.get('deepl_api_key', '') as String;
+      _geminiKeyController.text = c.get('gemini_api_key', '') as String;
+      setState(() => _config = c);
+    });
+  }
+
+  @override
+  void dispose() {
+    _deeplKeyController.dispose();
+    _geminiKeyController.dispose();
+    super.dispose();
+  }
+
+  String _providerSubtitle(TranslationProvider p) => switch (p) {
+        TranslationProvider.google =>
+          'Gratuito, sem limite conhecido. Traduz frase a frase — expressões '
+              'idiomáticas às vezes saem ao pé da letra.',
+        TranslationProvider.deepl =>
+          'Grátis até um teto de caracteres por mês (definido pela própria DeepL). '
+              'Qualidade geralmente melhor que o Google.',
+        TranslationProvider.gemini =>
+          'Grátis com limite diário de requisições. Por ser um modelo de linguagem, '
+              'entende melhor contexto e expressões idiomáticas.',
+      };
+
+  String _formatDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} '
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  Widget _apiKeyField({
+    required String label,
+    required String helpText,
+    required TextEditingController controller,
+    required bool obscure,
+    required VoidCallback toggleObscure,
+    required String configKey,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: controller,
+            obscureText: !obscure,
+            style: const TextStyle(color: AppPalette.text),
+            decoration: InputDecoration(
+              labelText: label,
+              suffixIcon: IconButton(
+                icon: Icon(obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                onPressed: toggleObscure,
+              ),
+            ),
+            onChanged: (v) => _update(configKey, v),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 4),
+            child: Text(
+              helpText,
+              style: TextStyle(color: AppPalette.text.withOpacity(0.6), fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget? _quotaStatus(TranslationProvider p) {
+    final resetWindow = p.quotaResetWindow;
+    final exhaustedAt = _config?.getQuotaExhaustedAt(p.storageKey);
+    if (resetWindow == null || exhaustedAt == null) return null;
+    final renewsAround = exhaustedAt.add(resetWindow);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 8, left: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Créditos esgotados em ${_formatDate(exhaustedAt)} — deve renovar por volta '
+              'de ${_formatDate(renewsAround)}. Até lá, o app usa o Google Translate '
+              'automaticamente.',
+              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              await _config?.clearQuotaExhausted(p.storageKey);
+              setState(() {});
+            },
+            child: const Text('Testar de novo'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _update(String key, dynamic value) async {
@@ -92,6 +191,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     final targetLang = config.get('target_language', 'pt') as String;
+    final currentProvider = TranslationProviderX.fromStorageKey(
+      config.get('translation_provider', 'google') as String,
+    );
     final autoTranslate = config.get('auto_translate', true) as bool;
     final useCoverTheme = config.get('use_cover_theme', true) as bool;
     final fontSize = (config.get('font_size', 15) as num).toDouble();
@@ -131,6 +233,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: autoTranslate,
             onChanged: (v) => _update('auto_translate', v),
           ),
+          const SizedBox(height: 8),
+          const Text(
+            'Motor de tradução',
+            style: TextStyle(color: AppPalette.text, fontWeight: FontWeight.w600, fontSize: 13),
+          ),
+          ...TranslationProvider.values.map(
+            (p) => RadioListTile<TranslationProvider>(
+              contentPadding: EdgeInsets.zero,
+              title: Text(p.displayName),
+              subtitle: Text(_providerSubtitle(p)),
+              value: p,
+              groupValue: currentProvider,
+              activeColor: AppPalette.accent,
+              onChanged: (v) {
+                if (v != null) _update('translation_provider', v.storageKey);
+              },
+            ),
+          ),
+          if (currentProvider == TranslationProvider.deepl) ...[
+            _apiKeyField(
+              label: 'Chave de API da DeepL',
+              helpText: 'Grátis em www.deepl.com/pro-api (plano "DeepL API Free").',
+              controller: _deeplKeyController,
+              obscure: _showDeeplKey,
+              toggleObscure: () => setState(() => _showDeeplKey = !_showDeeplKey),
+              configKey: 'deepl_api_key',
+            ),
+            if (_quotaStatus(TranslationProvider.deepl) != null) _quotaStatus(TranslationProvider.deepl)!,
+          ],
+          if (currentProvider == TranslationProvider.gemini) ...[
+            _apiKeyField(
+              label: 'Chave de API do Gemini',
+              helpText: 'Grátis em aistudio.google.com/apikey.',
+              controller: _geminiKeyController,
+              obscure: _showGeminiKey,
+              toggleObscure: () => setState(() => _showGeminiKey = !_showGeminiKey),
+              configKey: 'gemini_api_key',
+            ),
+            if (_quotaStatus(TranslationProvider.gemini) != null) _quotaStatus(TranslationProvider.gemini)!,
+          ],
           const Divider(height: 32),
           _sectionTitle('Leitura'),
           ListTile(

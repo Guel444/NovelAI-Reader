@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QStatusBar, QTextEdit, QToolBar,
     QVBoxLayout, QHBoxLayout, QWidget, QGridLayout, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QRadioButton, QButtonGroup,
 )
 
 from cache import TranslationCache
@@ -44,7 +45,12 @@ from export import export_translated_epub
 from glossary import Glossary
 from reader import EpubReader
 from theme import Palette, palette_from_cover
-from translator import Translator, SUPPORTED_LANGUAGES
+from translator import (
+    Translator, SUPPORTED_LANGUAGES, PROVIDERS, PROVIDER_DISPLAY_NAMES,
+    PROVIDER_DESCRIPTIONS, PROVIDER_NEEDS_KEY, PROVIDER_QUOTA_RESET_SECONDS,
+    PROVIDER_GOOGLE, PROVIDER_DEEPL, PROVIDER_GEMINI,
+)
+import time as _time
 
 
 PLACEHOLDER_COVER_STYLE = """
@@ -143,6 +149,59 @@ class SettingsDialog(QDialog):
                 selected_index = i
         self.target_lang_box.setCurrentIndex(selected_index)
 
+        # ---- motor de tradução ----
+        current_provider = config.get("translation_provider", PROVIDER_GOOGLE)
+        self.provider_group = QButtonGroup(self)
+        self.provider_radios: dict[str, QRadioButton] = {}
+        provider_container = QWidget()
+        provider_layout = QVBoxLayout(provider_container)
+        provider_layout.setContentsMargins(0, 0, 0, 0)
+        for provider in PROVIDERS:
+            radio = QRadioButton(PROVIDER_DISPLAY_NAMES[provider])
+            radio.setToolTip(PROVIDER_DESCRIPTIONS[provider])
+            radio.setChecked(provider == current_provider)
+            radio.toggled.connect(self._update_key_fields_visibility)
+            self.provider_group.addButton(radio)
+            self.provider_radios[provider] = radio
+            provider_layout.addWidget(radio)
+            hint = QLabel(PROVIDER_DESCRIPTIONS[provider])
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color: #9096ab; font-size: 11px; margin-left: 20px;")
+            provider_layout.addWidget(hint)
+
+        self.deepl_section = QWidget()
+        deepl_layout = QVBoxLayout(self.deepl_section)
+        deepl_layout.setContentsMargins(0, 6, 0, 6)
+        self.deepl_key_edit = QLineEdit(config.get("deepl_api_key", ""))
+        self.deepl_key_edit.setEchoMode(QLineEdit.Password)
+        self.deepl_key_edit.setPlaceholderText("Chave de API — grátis em www.deepl.com/pro-api")
+        deepl_layout.addWidget(QLabel("Chave de API da DeepL:"))
+        deepl_layout.addWidget(self.deepl_key_edit)
+        self.deepl_quota_label = QLabel()
+        self.deepl_quota_label.setWordWrap(True)
+        deepl_layout.addWidget(self.deepl_quota_label)
+        deepl_retry_btn = QPushButton("Testar de novo agora")
+        deepl_retry_btn.clicked.connect(lambda: self._clear_quota(PROVIDER_DEEPL))
+        deepl_layout.addWidget(deepl_retry_btn)
+
+        self.gemini_section = QWidget()
+        gemini_layout = QVBoxLayout(self.gemini_section)
+        gemini_layout.setContentsMargins(0, 6, 0, 6)
+        self.gemini_key_edit = QLineEdit(config.get("gemini_api_key", ""))
+        self.gemini_key_edit.setEchoMode(QLineEdit.Password)
+        self.gemini_key_edit.setPlaceholderText("Chave de API — grátis em aistudio.google.com/apikey")
+        gemini_layout.addWidget(QLabel("Chave de API do Gemini:"))
+        gemini_layout.addWidget(self.gemini_key_edit)
+        self.gemini_quota_label = QLabel()
+        self.gemini_quota_label.setWordWrap(True)
+        gemini_layout.addWidget(self.gemini_quota_label)
+        gemini_retry_btn = QPushButton("Testar de novo agora")
+        gemini_retry_btn.clicked.connect(lambda: self._clear_quota(PROVIDER_GEMINI))
+        gemini_layout.addWidget(gemini_retry_btn)
+
+        self._update_quota_labels()
+        self._update_key_fields_visibility()
+
         form = QFormLayout()
         form.addRow("Tema", self.theme_box)
         form.addRow("Fonte", self.font_box)
@@ -153,6 +212,10 @@ class SettingsDialog(QDialog):
         form.addRow(self.cover_theme_box)
         form.addRow("Velocidade de leitura (palavras/min)", self.wpm_box)
         form.addRow("Traduzir para", self.target_lang_box)
+        form.addRow(QLabel("Motor de tradução:"))
+        form.addRow(provider_container)
+        form.addRow(self.deepl_section)
+        form.addRow(self.gemini_section)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -161,6 +224,42 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
+
+    def _selected_provider(self) -> str:
+        for provider, radio in self.provider_radios.items():
+            if radio.isChecked():
+                return provider
+        return PROVIDER_GOOGLE
+
+    def _update_key_fields_visibility(self):
+        provider = self._selected_provider()
+        self.deepl_section.setVisible(provider == PROVIDER_DEEPL)
+        self.gemini_section.setVisible(provider == PROVIDER_GEMINI)
+
+    def _format_timestamp(self, ts: float) -> str:
+        return _time.strftime("%d/%m/%Y %H:%M", _time.localtime(ts))
+
+    def _update_quota_labels(self):
+        for provider, label in (
+            (PROVIDER_DEEPL, self.deepl_quota_label),
+            (PROVIDER_GEMINI, self.gemini_quota_label),
+        ):
+            exhausted_at = self.config.get_quota_exhausted_at(provider)
+            window = PROVIDER_QUOTA_RESET_SECONDS.get(provider)
+            if exhausted_at and window:
+                renews_at = exhausted_at + window
+                label.setText(
+                    f"Créditos esgotados em {self._format_timestamp(exhausted_at)} — deve "
+                    f"renovar por volta de {self._format_timestamp(renews_at)}. Até lá, o app "
+                    "usa o Google Translate automaticamente."
+                )
+                label.setStyleSheet("color: #d59a3a; font-size: 11px;")
+            else:
+                label.setText("")
+
+    def _clear_quota(self, provider: str):
+        self.config.clear_quota_exhausted(provider)
+        self._update_quota_labels()
 
     def apply(self):
         self.config.set("theme", self.theme_box.currentText())
@@ -172,6 +271,9 @@ class SettingsDialog(QDialog):
         self.config.set("use_cover_theme", self.cover_theme_box.isChecked())
         self.config.set("reading_wpm", self.wpm_box.value())
         self.config.set("target_language", self.target_lang_box.currentData())
+        self.config.set("translation_provider", self._selected_provider())
+        self.config.set("deepl_api_key", self.deepl_key_edit.text().strip())
+        self.config.set("gemini_api_key", self.gemini_key_edit.text().strip())
 
 
 class LibraryDialog(QDialog):
@@ -818,9 +920,8 @@ class MainWindow(QMainWindow):
         self.config = Config()
         self.cache = TranslationCache()
         self.glossary = Glossary()
-        self.translator = Translator(
-            target_lang=self.config.get("target_language"), cache=self.cache,
-            glossary=self.glossary,
+        self.translator = Translator.from_config(
+            self.config, cache=self.cache, glossary=self.glossary,
         )
 
         self.epub_reader: EpubReader | None = None
@@ -1396,7 +1497,11 @@ class MainWindow(QMainWindow):
     def _on_translation_done(self, chapter_index: int, paragraphs: list[str]):
         self.translated_chapters[chapter_index] = paragraphs
         self.progress_bar.setVisible(False)
-        self.statusBar().showMessage("Tradução concluída", 3000)
+        notice = self.translator.take_fallback_notice()
+        if notice:
+            self.statusBar().showMessage(notice, 8000)
+        else:
+            self.statusBar().showMessage("Tradução concluída", 3000)
         if chapter_index == self.current_chapter_index:
             chapter = self.epub_reader.get_chapter(chapter_index)
             self._show_chapter(chapter, paragraphs)
@@ -1447,7 +1552,11 @@ class MainWindow(QMainWindow):
     def _on_background_translation_done(self, chapter_index: int, paragraphs: list[str]):
         self.translated_chapters[chapter_index] = paragraphs
         self.background_consecutive_failures = 0
-        self.statusBar().showMessage("Próximo capítulo pré-traduzido em segundo plano", 3000)
+        notice = self.translator.take_fallback_notice()
+        if notice:
+            self.statusBar().showMessage(notice, 8000)
+        else:
+            self.statusBar().showMessage("Próximo capítulo pré-traduzido em segundo plano", 3000)
         if chapter_index == self.current_chapter_index:
             chapter = self.epub_reader.get_chapter(chapter_index)
             self._show_chapter(chapter, paragraphs)
@@ -1817,11 +1926,27 @@ class MainWindow(QMainWindow):
 
     def open_settings(self):
         old_target_lang = self.translator.target_lang
+        old_provider = self.translator.provider
+        old_api_key = self.translator.api_key
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() == QDialog.Accepted:
             dialog.apply()
             new_target_lang = self.config.get("target_language")
             self.translator.target_lang = new_target_lang
+
+            new_provider = self.config.get("translation_provider", PROVIDER_GOOGLE)
+            self.translator.provider = new_provider
+            if new_provider == PROVIDER_DEEPL:
+                self.translator.api_key = self.config.get("deepl_api_key", "") or None
+            elif new_provider == PROVIDER_GEMINI:
+                self.translator.api_key = self.config.get("gemini_api_key", "") or None
+            else:
+                self.translator.api_key = None
+            if new_provider != old_provider or self.translator.api_key != old_api_key:
+                # motor ou chave mudou — vale tentar de novo mesmo que a
+                # instância já tivesse caído pro Google antes
+                self.translator.reset_session_fallback()
+
             self._refresh_theme_for_book()
 
             if new_target_lang != old_target_lang:

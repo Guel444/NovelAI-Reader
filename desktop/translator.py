@@ -1,30 +1,35 @@
 """
-translator.py — Motor de tradução (Fase 2), v3: tradução em LOTE.
+translator.py — Motor de tradução (Fase 2), agora com 3 provedores.
 
-Traduz parágrafos passando primeiro pelo glossário (Fase 6) e pelo
-cache (Fase 5). Usa deep-translator (Google Translate) como backend
-padrão, mas foi pensado pra trocar de backend no futuro sem mexer no
-resto do app.
+Suporta 3 motores de tradução, escolhidos pelo usuário nas
+configurações:
+- Google Translate (via deep-translator, gratuito, sem chave, sem limite conhecido)
+- DeepL (API oficial, tier gratuito com cota mensal de caracteres)
+- Gemini (API oficial do Google, tier gratuito com cota diária de requisições —
+  entende contexto/expressões idiomáticas melhor por ser um modelo de linguagem)
 
-Mudança importante desta versão: antes, cada parágrafo virava UMA
-chamada de API separada — um capítulo com 40 parágrafos = 40
-chamadas. Em livros grandes (centenas de capítulos), isso soma
-milhares de chamadas rapidamente e o Google Translate bloqueia
-temporariamente por excesso de uso — o que na prática parecia o app
-"travar" sem explicação nenhuma no meio da tradução em lote.
+Se o motor escolhido não tiver chave configurada, ou estourar a cota
+gratuita (detectado pelo HTTP de "sem créditos" de cada provedor), o
+Translator cai automaticamente pro Google Translate e expõe um aviso
+em `pending_fallback_notice` pra tela mostrar ao usuário (leia com
+`take_fallback_notice()`). O esgotamento fica registrado no Config (se
+fornecido), por provedor, com timestamp — pra não ficar tentando o
+provedor esgotado de novo antes da cota ter chance de renovar.
 
-Agora os parágrafos que ainda não estão no cache são agrupados em
-blocos (respeitando o limite de caracteres por chamada) e traduzidos
-numa ÚNICA chamada por bloco, usando um separador que sobrevive à
-tradução. Isso reduz drasticamente o número de chamadas de API.
+Continua tudo passando primeiro pelo glossário e pelo cache. Parágrafos
+que ainda não estão no cache são agrupados em blocos e traduzidos numa
+ÚNICA chamada por bloco (com um separador que sobrevive à tradução),
+em vez de uma chamada por parágrafo — evita bloqueio por excesso de
+requisições em livros longos.
 """
 
+import json
 import time
 
-# Lista curada de idiomas suportados pelo Google Translate (código, nome
-# em português) — usada no seletor de idioma de destino em Configurações.
-# É uma lista estática (não depende de chamar a API pra listar idiomas),
-# então funciona mesmo sem internet até a hora de traduzir de verdade.
+# Lista curada de idiomas suportados — usada no seletor de idioma de
+# destino em Configurações. É uma lista estática (não depende de
+# chamar a API pra listar idiomas), então funciona mesmo sem internet
+# até a hora de traduzir de verdade.
 SUPPORTED_LANGUAGES = [
     ("pt", "Português"), ("en", "Inglês"), ("es", "Espanhol"),
     ("fr", "Francês"), ("de", "Alemão"), ("it", "Italiano"),
@@ -51,18 +56,83 @@ try:
 except ImportError:
     GoogleTranslator = None
 
+try:
+    import requests
+except ImportError:
+    requests = None
+
+# ---------- provedores ----------
+
+PROVIDER_GOOGLE = "google"
+PROVIDER_DEEPL = "deepl"
+PROVIDER_GEMINI = "gemini"
+
+PROVIDERS = [PROVIDER_GOOGLE, PROVIDER_DEEPL, PROVIDER_GEMINI]
+
+PROVIDER_DISPLAY_NAMES = {
+    PROVIDER_GOOGLE: "Google Translate",
+    PROVIDER_DEEPL: "DeepL",
+    PROVIDER_GEMINI: "Gemini",
+}
+
+PROVIDER_DESCRIPTIONS = {
+    PROVIDER_GOOGLE: (
+        "Gratuito, sem limite conhecido. Traduz frase a frase — expressões "
+        "idiomáticas às vezes saem ao pé da letra."
+    ),
+    PROVIDER_DEEPL: (
+        "Grátis até um teto de caracteres por mês (definido pela própria DeepL). "
+        "Qualidade geralmente melhor que o Google."
+    ),
+    PROVIDER_GEMINI: (
+        "Grátis com limite diário de requisições. Por ser um modelo de linguagem, "
+        "entende melhor contexto e expressões idiomáticas."
+    ),
+}
+
+PROVIDER_NEEDS_KEY = {PROVIDER_GOOGLE: False, PROVIDER_DEEPL: True, PROVIDER_GEMINI: True}
+
+# Tempo aproximado até a cota gratuita renovar — usado só pra decidir
+# quando vale tentar o provedor esgotado de novo, evitando bater na
+# mesma parede a cada capítulo aberto. Não é garantia de quando o
+# provedor renova de fato; é só uma folga razoável.
+PROVIDER_QUOTA_RESET_SECONDS = {
+    PROVIDER_DEEPL: 30 * 24 * 3600,
+    PROVIDER_GEMINI: 24 * 3600,
+}
+
+# Mapeamento pros códigos de idioma que a API do DeepL espera (diferem
+# em parte dos códigos acima). Idiomas ausentes daqui não são
+# suportados pelo DeepL — o Translator cai pro Google automaticamente
+# nesse caso. Cheque a documentação da DeepL de tempos em tempos, essa
+# lista de idiomas suportados muda.
+DEEPL_LANG_CODES = {
+    "pt": "PT-BR", "en": "EN-US", "es": "ES", "fr": "FR", "de": "DE",
+    "it": "IT", "ja": "JA", "ko": "KO", "zh-CN": "ZH", "ru": "RU",
+    "nl": "NL", "pl": "PL", "tr": "TR", "id": "ID", "sv": "SV",
+    "no": "NB", "da": "DA", "fi": "FI", "el": "EL", "uk": "UK",
+    "cs": "CS", "ro": "RO", "hu": "HU", "bg": "BG", "sk": "SK",
+    "lt": "LT", "lv": "LV", "et": "ET", "sl": "SL",
+}
+
+GEMINI_MODEL = "gemini-3-flash"
+GEMINI_ENDPOINT = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+)
+DEEPL_ENDPOINT = "https://api-free.deepl.com/v2/translate"
+
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 1.5
-CHUNK_SIZE = 4000  # limite prático da API gratuita do Google Translate
+CHUNK_SIZE = 4000  # limite prático por chamada
 PARAGRAPH_SEPARATOR = "\n@@P@@\n"
 SEPARATOR_TOKEN = "@@P@@"  # usado pra dividir de volta, tolerando espaços diferentes
 
 # Sinais de que a resposta NÃO é uma tradução de verdade, e sim uma
-# página de erro (ex.: Google bloqueando por excesso de chamadas) que
-# a biblioteca engoliu sem lançar exceção.
+# página de erro (ex.: bloqueio por excesso de chamadas) que a
+# biblioteca/API engoliu sem lançar exceção.
 ERROR_SIGNATURES = [
-    "error 500", "server error", "that's an error", "that’s an error",
-    "that's all we know", "that’s all we know", "502 bad gateway",
+    "error 500", "server error", "that's an error",
+    "that's all we know", "502 bad gateway",
     "503 service unavailable", "429 too many requests", "<!doctype html",
     "<html", "access denied", "please try again later",
 ]
@@ -72,19 +142,83 @@ class TranslationError(Exception):
     pass
 
 
+class _QuotaExceededError(Exception):
+    """Sinaliza especificamente "provedor sem créditos/cota agora" —
+    tratado à parte de outros erros porque não adianta tentar de novo
+    com o mesmo provedor: o Translator cai pro Google imediatamente."""
+
+    def __init__(self, provider: str):
+        super().__init__(provider)
+        self.provider = provider
+
+
 def _looks_like_error_page(text: str) -> bool:
     lowered = text.lower()
     return any(sig in lowered for sig in ERROR_SIGNATURES)
 
 
+def _language_name_for(code: str) -> str:
+    for c, name in SUPPORTED_LANGUAGES:
+        if c == code:
+            return name
+    return code
+
+
 class Translator:
     def __init__(self, target_lang: str = "pt", cache: TranslationCache | None = None,
-                 glossary: Glossary | None = None):
+                 glossary: Glossary | None = None, provider: str = PROVIDER_GOOGLE,
+                 api_key: str | None = None, config=None):
         self.target_lang = target_lang
         self.cache = cache or TranslationCache()
         self.glossary = glossary or Glossary()
+        self.provider = provider
+        self.api_key = api_key
+        # opcional — se fornecido (instância de config.Config), o
+        # Translator consulta/atualiza aqui quando o provedor escolhido
+        # estourar a cota, pra não insistir nele de novo antes da
+        # janela de renovação passar.
+        self.config = config
         self.last_error: str | None = None
         self._backend_available = GoogleTranslator is not None
+
+        # Preenchido quando a última chamada precisou cair pro Google
+        # por falta de chave/cota do motor escolhido. A tela lê isso
+        # (com take_fallback_notice) pra avisar o usuário uma vez.
+        self.pending_fallback_notice: str | None = None
+        # Já caiu pro Google nesta instância nesta "sessão" de uso —
+        # evita ficar testando de novo um provedor que a gente já sabe
+        # que vai falhar, dentro do mesmo lote de tradução.
+        self._session_fallback = False
+
+    @classmethod
+    def from_config(cls, config, cache: TranslationCache | None = None,
+                     glossary: Glossary | None = None) -> "Translator":
+        """Cria um Translator já configurado com o motor, idioma e
+        chave de API escolhidos pelo usuário nas configurações."""
+        provider = config.get("translation_provider", PROVIDER_GOOGLE)
+        api_key = None
+        if provider == PROVIDER_DEEPL:
+            api_key = config.get("deepl_api_key", "") or None
+        elif provider == PROVIDER_GEMINI:
+            api_key = config.get("gemini_api_key", "") or None
+        return cls(
+            target_lang=config.get("target_language", "pt"),
+            cache=cache, glossary=glossary,
+            provider=provider, api_key=api_key, config=config,
+        )
+
+    def take_fallback_notice(self) -> str | None:
+        """Lê e limpa o aviso de fallback pendente, se houver."""
+        notice = self.pending_fallback_notice
+        self.pending_fallback_notice = None
+        return notice
+
+    def reset_session_fallback(self):
+        """Permite tentar o motor escolhido de novo (ex.: depois que o
+        usuário trocou de provedor ou colou uma chave nova nas
+        configurações), mesmo que esta instância já tivesse caído pro
+        Google antes."""
+        self._session_fallback = False
 
     def _new_backend(self):
         """Cria um cliente de tradução NOVO a cada chamada — este
@@ -93,37 +227,168 @@ class Translator:
         reaproveitar o MESMO cliente de rede entre threads não é seguro."""
         return GoogleTranslator(source="auto", target=self.target_lang)
 
-    def _translate_chunk(self, text: str) -> str:
-        last_exc = None
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                backend = self._new_backend()
-                result = backend.translate(text)
-                if result is None or not result.strip():
-                    raise TranslationError("A API de tradução devolveu vazio.")
-                if _looks_like_error_page(result):
-                    raise TranslationError(
-                        "O serviço de tradução respondeu com uma página de erro "
-                        "(provavelmente bloqueio temporário por excesso de "
-                        "requisições)."
-                    )
-                return result
-            except Exception as exc:  # noqa: BLE001 — qualquer falha de rede/API
-                last_exc = exc
-                time.sleep(RETRY_DELAY_SECONDS * attempt)
-        raise TranslationError(
-            f"Não consegui traduzir depois de {MAX_RETRIES} tentativas "
-            f"(verifique sua conexão, ou espere um pouco — o Google Translate "
-            f"às vezes bloqueia temporariamente por excesso de chamadas). "
-            f"Detalhe: {last_exc}"
-        )
+    def _recently_exhausted(self, provider: str) -> bool:
+        window = PROVIDER_QUOTA_RESET_SECONDS.get(provider)
+        if window is None or self.config is None:
+            return False
+        exhausted_at = self.config.get_quota_exhausted_at(provider)
+        if not exhausted_at:
+            return False
+        return (time.time() - exhausted_at) < window
 
-    def _call_backend(self, text: str) -> str:
+    def _validate(self, result: str | None) -> str:
+        if result is None or not result.strip():
+            raise TranslationError("A API de tradução devolveu vazio.")
+        if _looks_like_error_page(result):
+            raise TranslationError(
+                "O serviço de tradução respondeu com uma página de erro "
+                "(provavelmente bloqueio temporário por excesso de requisições)."
+            )
+        return result
+
+    def _call_google(self, text: str) -> str:
         if not self._backend_available:
             raise TranslationError(
                 "A biblioteca 'deep-translator' não está instalada. "
                 "Rode: pip install deep-translator"
             )
+        backend = self._new_backend()
+        return backend.translate(text)
+
+    def _call_deepl(self, text: str) -> str:
+        if requests is None:
+            raise TranslationError(
+                "A biblioteca 'requests' não está instalada. Rode: pip install requests"
+            )
+        deepl_target = DEEPL_LANG_CODES.get(self.target_lang)
+        if deepl_target is None:
+            # Idioma não suportado pela DeepL — não é questão de cota,
+            # mas trata do mesmo jeito (cai pro Google) pra não travar
+            # a leitura.
+            self.pending_fallback_notice = (
+                f"{_language_name_for(self.target_lang)} não é suportado pelo DeepL. "
+                "Usando o Google Translate para este idioma."
+            )
+            self._session_fallback = True
+            return self._call_google(text)
+
+        response = requests.post(
+            DEEPL_ENDPOINT,
+            headers={"Authorization": f"DeepL-Auth-Key {self.api_key}"},
+            data={"text": text, "target_lang": deepl_target},
+            timeout=30,
+        )
+        if response.status_code in (456, 429):
+            raise _QuotaExceededError(PROVIDER_DEEPL)
+        if response.status_code == 403:
+            raise TranslationError("Chave de API do DeepL inválida ou não autorizada.")
+        if response.status_code != 200:
+            raise TranslationError(f"DeepL respondeu HTTP {response.status_code}.")
+        data = response.json()
+        translations = data.get("translations") or []
+        if not translations:
+            raise TranslationError("DeepL não retornou nenhuma tradução.")
+        return translations[0].get("text", "")
+
+    def _call_gemini(self, text: str) -> str:
+        if requests is None:
+            raise TranslationError(
+                "A biblioteca 'requests' não está instalada. Rode: pip install requests"
+            )
+        language_name = _language_name_for(self.target_lang)
+        prompt = (
+            f"Traduza o texto a seguir para {language_name}, mantendo o tom e o registro "
+            "do original (inclusive gírias e expressões idiomáticas — adapte pro "
+            f"equivalente natural em {language_name}, não traduza ao pé da letra). "
+            "Preserve exatamente, sem traduzir ou alterar: quebras de linha, o marcador "
+            f'"{SEPARATOR_TOKEN}" e qualquer trecho no formato XPROTECTnX (ex: XPROTECT0X, '
+            "XPROTECT12X). Responda só com o texto traduzido, sem nenhum comentário, "
+            f"explicação ou marcação extra.\n\n{text}"
+        )
+        response = requests.post(
+            GEMINI_ENDPOINT,
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key or ""},
+            data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}),
+            timeout=60,
+        )
+        if response.status_code == 429:
+            raise _QuotaExceededError(PROVIDER_GEMINI)
+        if response.status_code in (401, 403):
+            raise TranslationError("Chave de API do Gemini inválida ou não autorizada.")
+        if response.status_code != 200:
+            raise TranslationError(f"Gemini respondeu HTTP {response.status_code}.")
+        data = response.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise TranslationError("Gemini não retornou nenhum candidato de tradução.")
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        if not parts:
+            raise TranslationError("Gemini retornou uma resposta vazia.")
+        return parts[0].get("text", "")
+
+    def _call_provider(self, provider: str, text: str) -> str:
+        if provider == PROVIDER_DEEPL:
+            return self._call_deepl(text)
+        if provider == PROVIDER_GEMINI:
+            return self._call_gemini(text)
+        return self._call_google(text)
+
+    def _translate_chunk(self, text: str) -> str:
+        effective_provider = self.provider
+
+        if self._session_fallback:
+            effective_provider = PROVIDER_GOOGLE
+        elif PROVIDER_NEEDS_KEY.get(self.provider) and not (self.api_key and self.api_key.strip()):
+            effective_provider = PROVIDER_GOOGLE
+            display = PROVIDER_DISPLAY_NAMES[self.provider]
+            self.pending_fallback_notice = (
+                f"Nenhuma chave configurada para {display}. Usando o Google Translate "
+                f"por enquanto — adicione a chave nas configurações pra usar {display}."
+            )
+            self._session_fallback = True
+        elif PROVIDER_NEEDS_KEY.get(self.provider) and self._recently_exhausted(self.provider):
+            effective_provider = PROVIDER_GOOGLE
+            display = PROVIDER_DISPLAY_NAMES[self.provider]
+            self.pending_fallback_notice = (
+                f"Os créditos gratuitos do {display} ainda não devem ter renovado. "
+                "Usando o Google Translate por enquanto."
+            )
+            self._session_fallback = True
+
+        last_exc = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                result = self._call_provider(effective_provider, text)
+                return self._validate(result)
+            except _QuotaExceededError as exc:
+                # Não adianta insistir no mesmo provedor: registra o
+                # esgotamento, avisa a tela e cai pro Google já nesta
+                # mesma tentativa (sem contar como uma tentativa "gasta").
+                if self.config is not None:
+                    self.config.set_quota_exhausted(exc.provider)
+                display = PROVIDER_DISPLAY_NAMES[exc.provider]
+                self.pending_fallback_notice = (
+                    f"Os créditos gratuitos do {display} acabaram por agora. Troquei "
+                    "para o Google Translate automaticamente."
+                )
+                self._session_fallback = True
+                effective_provider = PROVIDER_GOOGLE
+                try:
+                    result = self._call_provider(PROVIDER_GOOGLE, text)
+                    return self._validate(result)
+                except Exception as exc2:  # noqa: BLE001
+                    last_exc = exc2
+            except Exception as exc:  # noqa: BLE001 — qualquer falha de rede/API
+                last_exc = exc
+                time.sleep(RETRY_DELAY_SECONDS * attempt)
+        raise TranslationError(
+            f"Não consegui traduzir depois de {MAX_RETRIES} tentativas "
+            f"(verifique sua conexão, ou espere um pouco — o serviço de tradução "
+            f"às vezes bloqueia temporariamente por excesso de chamadas). "
+            f"Detalhe: {last_exc}"
+        )
+
+    def _call_backend(self, text: str) -> str:
         return self._translate_chunk(text)
 
     def _build_batches(self, texts: list[str]) -> list[list[str]]:

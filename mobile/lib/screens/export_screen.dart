@@ -30,6 +30,7 @@ class _ExportScreenState extends State<ExportScreen> {
   Uri? _savedPath;
   int _chaptersDone = 0;
   double _chapterProgress = 0;
+  String? _fallbackNotice;
 
   Future<void> _startExport() async {
     setState(() {
@@ -37,6 +38,7 @@ class _ExportScreenState extends State<ExportScreen> {
       _error = null;
       _done = false;
       _chaptersDone = 0;
+      _fallbackNotice = null;
     });
 
     try {
@@ -45,7 +47,7 @@ class _ExportScreenState extends State<ExportScreen> {
       final glossary = Glossary();
       await glossary.load();
       final cache = TranslationCache();
-      final translator = Translator(targetLang: targetLang, cache: cache, glossary: glossary);
+      final translator = Translator.fromConfig(config, cache: cache, glossary: glossary);
 
       final translatedByChapter = <int, List<String>>{};
       var chaptersFailed = 0;
@@ -67,6 +69,8 @@ class _ExportScreenState extends State<ExportScreen> {
             },
           );
           translatedByChapter[chapter.index] = translated;
+          final notice = translator.takeFallbackNotice();
+          if (notice != null && mounted) setState(() => _fallbackNotice = notice);
         } on TranslationError {
           // um capítulo falhando não deve jogar fora a tradução dos
           // outros — ele só sai no idioma original no arquivo final
@@ -132,6 +136,11 @@ class _ExportScreenState extends State<ExportScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              ),
+            if (_fallbackNotice != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_fallbackNotice!, style: const TextStyle(color: Colors.orangeAccent)),
               ),
             if (_done)
               Padding(

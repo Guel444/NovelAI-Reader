@@ -56,6 +56,10 @@ class AppConfig {
     'auto_translate': true,
     'use_cover_theme': true,
     'target_language': 'pt',
+    'translation_provider': 'google', // google | deepl | gemini
+    'deepl_api_key': '',
+    'gemini_api_key': '',
+    'quota_exhausted': <String, dynamic>{}, // {provider: isoDateString} — última vez que o provedor esgotou a cota
     'last_chapter': <String, dynamic>{}, // {book_id: chapter_index}
     'excluded_chapters': <String, dynamic>{}, // {book_id: {href: bool}} — ajuste manual, vence a heurística
     'library': <String, dynamic>{}, // {book_id: {...}}
@@ -147,6 +151,30 @@ class AppConfig {
   Future<void> setChapterOverrides(String bookId, Map<String, bool> overrides) async {
     final all = _data['excluded_chapters'] as Map<String, dynamic>;
     all[bookId] = overrides;
+    await _save();
+  }
+
+  // ---------- cota de tradução (Deepl/Gemini) ----------
+
+  /// Quando o provedor [provider] (chave 'deepl' ou 'gemini') esgotou
+  /// a cota gratuita pela última vez, ou null se nunca esgotou (ou já
+  /// foi limpo manualmente).
+  DateTime? getQuotaExhaustedAt(String provider) {
+    final map = _data['quota_exhausted'] as Map<String, dynamic>;
+    final iso = map[provider] as String?;
+    if (iso == null) return null;
+    return DateTime.tryParse(iso);
+  }
+
+  Future<void> setQuotaExhausted(String provider) async {
+    final map = _data['quota_exhausted'] as Map<String, dynamic>;
+    map[provider] = DateTime.now().toIso8601String();
+    await _save();
+  }
+
+  Future<void> clearQuotaExhausted(String provider) async {
+    final map = _data['quota_exhausted'] as Map<String, dynamic>;
+    map.remove(provider);
     await _save();
   }
 

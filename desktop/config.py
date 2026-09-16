@@ -21,6 +21,10 @@ DEFAULTS = {
     "auto_translate": True,
     "use_cover_theme": True,
     "target_language": "pt",
+    "translation_provider": "google",  # google | deepl | gemini
+    "deepl_api_key": "",
+    "gemini_api_key": "",
+    "quota_exhausted": {},        # {provider: timestamp_unix} — última vez que esgotou a cota
     "last_book": None,
     "last_chapter": {},          # {book_id: chapter_index}
     "excluded_chapters": {},     # {book_id: [nome_do_item, ...]}
@@ -97,6 +101,24 @@ class Config:
         excluded = self.data.setdefault("excluded_chapters", {})
         excluded[book_id] = list(item_names)
         self.save()
+
+    # ---------- cota de tradução (DeepL/Gemini) ----------
+
+    def get_quota_exhausted_at(self, provider: str) -> float | None:
+        """Timestamp (time.time()) da última vez que o provedor esgotou
+        a cota gratuita, ou None se nunca esgotou (ou foi limpo)."""
+        return self.data.get("quota_exhausted", {}).get(provider)
+
+    def set_quota_exhausted(self, provider: str):
+        quota = self.data.setdefault("quota_exhausted", {})
+        quota[provider] = time.time()
+        self.save()
+
+    def clear_quota_exhausted(self, provider: str):
+        quota = self.data.get("quota_exhausted", {})
+        if provider in quota:
+            quota.pop(provider, None)
+            self.save()
 
     # ---------- biblioteca (histórico de livros abertos) ----------
 

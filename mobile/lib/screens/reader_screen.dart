@@ -64,11 +64,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final glossary = Glossary();
     await glossary.load();
     final cache = TranslationCache();
-    final translator = Translator(
-      targetLang: config.get('target_language', 'pt') as String,
-      cache: cache,
-      glossary: glossary,
-    );
+    final translator = Translator.fromConfig(config, cache: cache, glossary: glossary);
     setState(() {
       _config = config;
       _translator = translator;
@@ -120,13 +116,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _translatedParagraphs = translated;
         _isTranslating = false;
       });
+      _showFallbackNoticeIfAny();
     } on TranslationError catch (e) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _translationError = e.message;
         _isTranslating = false;
       });
+      _showFallbackNoticeIfAny();
     }
+  }
+
+  /// Se o motor de tradução escolhido caiu pro Google (sem chave, sem
+  /// cota, ou idioma não suportado), avisa o usuário uma vez.
+  void _showFallbackNoticeIfAny() {
+    final notice = _translator?.takeFallbackNotice();
+    if (notice == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(notice), duration: const Duration(seconds: 6)),
+    );
   }
 
   void _onScroll() {

@@ -27,6 +27,7 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
   int _chaptersDone = 0;
   int _chaptersFailed = 0;
   double _chapterProgress = 0;
+  String? _fallbackNotice;
 
   Future<void> _startTranslating() async {
     setState(() {
@@ -35,6 +36,7 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
       _done = false;
       _chaptersDone = 0;
       _chaptersFailed = 0;
+      _fallbackNotice = null;
     });
 
     try {
@@ -43,7 +45,7 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
       final glossary = Glossary();
       await glossary.load();
       final cache = TranslationCache();
-      final translator = Translator(targetLang: targetLang, cache: cache, glossary: glossary);
+      final translator = Translator.fromConfig(config, cache: cache, glossary: glossary);
 
       for (final chapter in widget.book.chapters) {
         final paragraphs = chapter.paragraphs;
@@ -66,6 +68,8 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
         } on TranslationError {
           _chaptersFailed++;
         }
+        final notice = translator.takeFallbackNotice();
+        if (notice != null) _fallbackNotice = notice;
         _chaptersDone++;
         if (mounted) setState(() {});
       }
@@ -108,6 +112,11 @@ class _TranslateAllScreenState extends State<TranslateAllScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              ),
+            if (_fallbackNotice != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_fallbackNotice!, style: const TextStyle(color: Colors.orangeAccent)),
               ),
             if (_done)
               Padding(
